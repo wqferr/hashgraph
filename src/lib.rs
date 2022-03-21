@@ -15,9 +15,10 @@ pub struct Edge<V: Hash + Eq, E> {
     value: E
 }
 
+// Does not allow for more than 1 edge per pair of vertices
 pub struct HashGraph<'a, V: Hash + Eq, E> {
     nodes: HashMap<V, Vec<&'a Edge<V, E>>>,
-    edges: HashMap<(V, V), E>
+    edges: HashMap<(V, V), Edge<V, E>>
 }
 
 impl<'a, V: Hash + Eq, E> HashGraph<'a, V, E> {
@@ -28,7 +29,7 @@ impl<'a, V: Hash + Eq, E> HashGraph<'a, V, E> {
         }
     }
 
-    pub fn with_vertices(vertices: Vec<V>) -> Result<Self> {
+    pub fn with_vertices<const N: usize>(vertices: [V; N]) -> Result<Self> {
         let mut graph = HashGraph::new();
         for v in vertices {
             graph.create_vertex(v)?;
@@ -37,16 +38,40 @@ impl<'a, V: Hash + Eq, E> HashGraph<'a, V, E> {
     }
 
     pub fn create_vertex(&mut self, vertex: V) -> Result<()> {
-        if self.nodes.contains_key(&vertex) {
+        if self.has_vertex(&vertex) {
             Err(Error::DuplicateVertex)
         } else {
-            self.nodes.insert(vertex, vec![]);
+            self.create_vertex_unsafe(vertex);
             Ok(())
         }
     }
 
+    pub fn has_vertex(&self, vertex: &V) -> bool {
+        self.nodes.contains_key(vertex)
+    }
+
+    // Errors if any of the given vertices would've been duplicates.
+    // Will not add any vertices if there is an error.
+    pub fn create_vertices(&mut self, vertices: Vec<V>) -> Result<()> {
+        for v in vertices.iter() {
+            if self.has_vertex(&v) {
+                return Err(Error::DuplicateVertex)
+            }
+        }
+
+        // Separate loop so it only changes self if there were no errors
+        for v in vertices {
+            self.create_vertex_unsafe(v);
+        }
+        Ok(())
+    }
+
     pub fn vertices(&self) -> HashSet<&V> {
         self.nodes.keys().collect()
+    }
+
+    fn create_vertex_unsafe(&mut self, vertex: V) {
+        self.nodes.insert(vertex, vec![]);
     }
 }
 
@@ -68,10 +93,12 @@ mod tests {
 
         assert_eq!(Ok(()), g.create_vertex('a'));
         expected_vertices.insert(&'a');
+        assert!(g.has_vertex(&'a'));
         assert_eq!(expected_vertices, g.vertices());
 
         assert_eq!(Ok(()), g.create_vertex('b'));
         expected_vertices.insert(&'b');
+        assert!(g.has_vertex(&'b'));
         assert_eq!(expected_vertices, g.vertices());
     }
 
@@ -80,5 +107,12 @@ mod tests {
         let mut g = HashGraph::<char, f32>::new();
         assert_eq!(Ok(()), g.create_vertex('a'));
         assert_eq!(Err(Error::DuplicateVertex), g.create_vertex('a'));
+    }
+
+    #[test]
+    fn can_create_populated() {
+        let g = HashGraph::<char, f32>::with_vertices(['a', 'b', 'c']).unwrap();
+        let expected_vertices = HashSet::from([&'a', &'b', &'c']);
+        assert_eq!(expected_vertices, g.vertices());
     }
 }
