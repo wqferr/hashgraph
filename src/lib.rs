@@ -1,6 +1,7 @@
 use std::hash::Hash;
 use std::collections::HashMap;
 
+// Joins two vertices of type V, with associated edge value E
 pub struct Edge<V: Hash, E> {
     source: V,
     target: V,
@@ -8,5 +9,5 @@ pub struct Edge<V: Hash, E> {
 }
 
 pub struct HashGraph<V: Hash, E> {
-    nodes: HashMap<V, Edge<V, E>>
+    nodes: HashMap<V, Vec<Edge<V, E>>>
 }
