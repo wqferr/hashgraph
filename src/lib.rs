@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
-    UnknownVertex,
+    NonexistentVertex,
     DuplicateVertex,
+    NonexistentEdge,
     DuplicateEdge
 }
 
@@ -93,12 +94,23 @@ impl<V: Vertex, E> HashGraph<V, E> {
 
     pub fn create_edge(&mut self, source: V, target: V, value: E) -> Result<()> {
         if !self.has_vertex(source) || !self.has_vertex(target) {
-            return Err(Error::UnknownVertex);
+            return Err(Error::NonexistentVertex);
         } else if self.has_edge(source, target) {
             return Err(Error::DuplicateEdge);
         }
 
         self.create_edge_unsafe(source, target, value);
+        Ok(())
+    }
+
+    pub fn drop_edge(&mut self, source: V, target: V) -> Result<()> {
+        if !self.has_edge(source, target) {
+            return Err(Error::NonexistentEdge);
+        }
+
+        // This will panic in case both fields get desynced somehow
+        self.node_edges.get_mut(&source).unwrap().remove(&target);
+        self.edges.remove(&(source, target));
         Ok(())
     }
 
@@ -161,7 +173,7 @@ mod vertex_tests {
     #[test]
     fn can_detect_duplicate_vertices() {
         let mut g = HashGraph::<char, f32>::new();
-        assert_eq!(Ok(()), g.create_vertex('a'));
+        assert!(g.create_vertex('a').is_ok());
         assert_eq!(Err(Error::DuplicateVertex), g.create_vertex('a'));
     }
 
@@ -182,7 +194,6 @@ mod edge_tests {
     fn can_create_edges() {
         let mut g = HashGraph::with_vertices(['a', 'b', 'c']).unwrap();
         assert!(g.create_edge('a', 'b', 5.0).is_ok());
-        assert_eq!(Err(Error::DuplicateEdge), g.create_edge('a', 'b', 3.0));
         assert!(g.create_edge('a', 'c', 3.0).is_ok());
         assert!(g.create_edge('b', 'c', 2.0).is_ok());
 
@@ -193,7 +204,7 @@ mod edge_tests {
         assert_eq!(1, edges_from_b.len());
         assert_eq!(0, edges_from_c.len());
 
-        // Make sure 'b' is edge #0
+        // Make sure 'a'-'b' is edge #0
         edges_from_a.sort_by(|&x, &y| x.target().cmp(y.target()));
 
         assert_eq!(&'a', edges_from_a[0].source());
@@ -207,5 +218,44 @@ mod edge_tests {
         assert_eq!(&'b', edges_from_b[0].source());
         assert_eq!(&'c', edges_from_b[0].target());
         assert_eq!(&2.0, edges_from_b[0].value());
+    }
+
+
+    #[test]
+    fn can_detect_duplicate_edges() {
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c']).unwrap();
+        assert!(g.create_edge('a', 'b', 5.0).is_ok());
+        assert_eq!(Err(Error::DuplicateEdge), g.create_edge('a', 'b', 3.0));
+        assert!(g.create_edge('b', 'a', 5.0).is_ok());
+    }
+
+    #[test]
+    fn can_detect_edge_between_nonexistent_vertices() {
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c']).unwrap();
+        assert_eq!(Err(Error::NonexistentVertex), g.create_edge('a', 'd', 2.0));
+        assert_eq!(Err(Error::NonexistentVertex), g.create_edge('d', 'a', 2.0));
+        assert_eq!(Err(Error::NonexistentVertex), g.create_edge('d', 'e', 2.0));
+    }
+
+    #[test]
+    fn can_drop_edges() {
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c']).unwrap();
+        g.create_edge('a', 'b', 3.0).unwrap();
+        g.create_edge('a', 'c', 1.0).unwrap();
+        
+        assert!(g.drop_edge('a', 'b').is_ok());
+        let edges = g.edges_from('a');
+        assert_eq!(1, edges.len());
+        assert_eq!(&'c', edges[0].target());
+    }
+
+    #[test]
+    fn can_detect_unknown_edges() {
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c']).unwrap();
+        g.create_edge('a', 'b', 3.0).unwrap();
+        g.create_edge('a', 'c', 1.0).unwrap();
+
+        assert_eq!(Err(Error::NonexistentEdge), g.drop_edge('b', 'a'));
+        assert_eq!(Err(Error::NonexistentEdge), g.drop_edge('c', 'b'));
     }
 }
