@@ -1,5 +1,5 @@
 use std::hash::Hash;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -21,6 +21,32 @@ pub struct Edge<V: Vertex, E> {
     value: E
 }
 
+// Does not allow for more than 1 edge per pair of vertices
+pub struct HashGraph<V: Vertex, E> {
+    // Set of existing nodes
+    nodes: HashSet<V>,
+
+    // Maps each node to its outgoing edges
+    node_edges: HashMap<V, HashSet<V>>,
+
+    // Maps pairs of nodes to their connecting edge, if it exists
+    edges: HashMap<(V, V), Edge<V, E>>
+}
+
+pub struct BreadthFirstIter<'a, V: Vertex, E> {
+    graph: &'a HashGraph<V, E>,
+    open: VecDeque<V>,
+    closed: HashSet<V>,
+    parent: HashMap<V, &'a Edge<V, E>>
+}
+
+// TODO
+// pub struct DepthFirstIter<'a, V: Vertex, E> {
+//     graph: &'a HashGraph<V, E>,
+//     current: V,
+//     visited: HashSet<V>
+// }
+
 impl<V: Vertex, E> Edge<V, E> {
     pub fn source(&self) -> &V {
         &self.source
@@ -33,13 +59,6 @@ impl<V: Vertex, E> Edge<V, E> {
     pub fn value(&self) -> &E {
         &self.value
     }
-}
-
-// Does not allow for more than 1 edge per pair of vertices
-pub struct HashGraph<V: Vertex, E> {
-    nodes: HashSet<V>,
-    node_edges: HashMap<V, HashSet<V>>,
-    edges: HashMap<(V, V), Edge<V, E>>
 }
 
 impl<V: Vertex, E> HashGraph<V, E> {
@@ -132,6 +151,15 @@ impl<V: Vertex, E> HashGraph<V, E> {
         self.edges.values().collect()
     }
 
+    pub fn broad_iter(&self, start: V) -> impl Iterator<Item=(V, Option<&Edge<V, E>>)> {
+        BreadthFirstIter {
+            closed: HashSet::new(),
+            open: VecDeque::from([start]),
+            graph: self,
+            parent: HashMap::new()
+        }
+    }
+
     fn create_vertex_unsafe(&mut self, vertex: V) {
         self.nodes.insert(vertex.clone());
         self.node_edges.insert(vertex, HashSet::new());
@@ -141,6 +169,27 @@ impl<V: Vertex, E> HashGraph<V, E> {
         let new_edge = Edge { source: source, target: target, value: value };
         self.edges.insert((source, target), new_edge);
         self.node_edges.get_mut(&source).unwrap().insert(target);
+    }
+}
+
+impl<'a, V: Vertex, E> Iterator for BreadthFirstIter<'a, V, E> {
+    type Item = (V, Option<&'a Edge<V, E>>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.open.is_empty() {
+            return None;
+        }
+        let current = self.open.pop_front().unwrap();
+        self.closed.insert(current);
+        let edge_to_current = self.parent.remove(&current);
+        for edge in self.graph.edges_from(current) {
+            let next = edge.target;
+            if !self.closed.contains(&next) {
+                self.open.push_back(next);
+                self.parent.insert(next, edge);
+            }
+        }
+        Some((current, edge_to_current))
     }
 }
 
@@ -257,5 +306,35 @@ mod edge_tests {
 
         assert_eq!(Err(Error::NonexistentEdge), g.drop_edge('b', 'a'));
         assert_eq!(Err(Error::NonexistentEdge), g.drop_edge('c', 'b'));
+    }
+}
+
+#[cfg(test)]
+mod iter_tests {
+    use super::*;
+
+    #[test]
+    fn can_do_breadth_first_traversal() {
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c', 'd', 'e', 'f']).unwrap();
+        g.create_edge('a', 'b', 2.0).unwrap();
+        g.create_edge('a', 'c', 3.0).unwrap();
+        g.create_edge('b', 'd', 5.0).unwrap();
+        g.create_edge('c', 'd', 1.0).unwrap();
+        g.create_edge('d', 'e', 2.0).unwrap();
+
+        g.create_edge('f', 'c', 1.0).unwrap();
+        g.create_edge('c', 'a', 5.0).unwrap();
+        // 'f' can't be reached
+
+        let mut visit_order = HashMap::<char, usize>::new();
+        for (i, (vertex, _edge)) in g.broad_iter('a').enumerate() {
+            visit_order.insert(vertex, i);
+        }
+
+        assert!(visit_order[&'a'] == 0);
+        assert!(visit_order[&'b'] < visit_order[&'d']);
+        assert!(visit_order[&'c'] < visit_order[&'d']);
+        assert!(visit_order[&'d'] < visit_order[&'e']);
+        assert!(!visit_order.contains_key(&'f'));
     }
 }
