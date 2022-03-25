@@ -40,12 +40,12 @@ pub struct BreadthFirstIter<'a, V: Vertex, E> {
     parent: HashMap<V, &'a Edge<V, E>>
 }
 
-// TODO
-// pub struct DepthFirstIter<'a, V: Vertex, E> {
-//     graph: &'a HashGraph<V, E>,
-//     current: V,
-//     visited: HashSet<V>
-// }
+pub struct DepthFirstIter<'a, V: Vertex, E> {
+    graph: &'a HashGraph<V, E>,
+    open: VecDeque<V>,
+    closed: HashSet<V>,
+    parent: HashMap<V, &'a Edge<V, E>>
+}
 
 impl<V: Vertex, E> Edge<V, E> {
     pub fn source(&self) -> &V {
@@ -151,11 +151,20 @@ impl<V: Vertex, E> HashGraph<V, E> {
         self.edges.values().collect()
     }
 
-    pub fn broad_iter(&self, start: V) -> impl Iterator<Item=(V, Option<&Edge<V, E>>)> {
+    pub fn breadth_first_iter(&self, start: V) -> impl Iterator<Item=(V, Option<&Edge<V, E>>)> {
         BreadthFirstIter {
+            graph: self,
             closed: HashSet::new(),
             open: VecDeque::from([start]),
+            parent: HashMap::new()
+        }
+    }
+
+    pub fn depth_first_iter(&self, start: V) -> impl Iterator<Item=(V, Option<&Edge<V, E>>)> {
+        DepthFirstIter {
             graph: self,
+            closed: HashSet::new(),
+            open: VecDeque::from([start]),
             parent: HashMap::new()
         }
     }
@@ -175,11 +184,48 @@ impl<V: Vertex, E> HashGraph<V, E> {
 impl<'a, V: Vertex, E> Iterator for BreadthFirstIter<'a, V, E> {
     type Item = (V, Option<&'a Edge<V, E>>);
 
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (1, Some(self.graph.vertices().len()))
+    }
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.open.is_empty() {
             return None;
         }
         let current = self.open.pop_front().unwrap();
+        self.closed.insert(current);
+        let edge_to_current = self.parent.remove(&current);
+        for edge in self.graph.edges_from(current) {
+            let next = edge.target;
+            if !self.closed.contains(&next) {
+                self.open.push_back(next);
+                self.parent.insert(next, edge);
+            }
+        }
+        Some((current, edge_to_current))
+    }
+}
+
+impl<'a, V: Vertex, E> Iterator for DepthFirstIter<'a, V, E> {
+    type Item = (V, Option<&'a Edge<V, E>>);
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (1, Some(self.graph.vertices().len()))
+    }
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut current;
+
+        loop {
+            if self.open.is_empty() {
+                return None;
+            }
+            current = self.open.pop_back().unwrap();
+            if !self.closed.contains(&current) {
+                break;
+            }
+        }
+
         self.closed.insert(current);
         let edge_to_current = self.parent.remove(&current);
         for edge in self.graph.edges_from(current) {
@@ -314,7 +360,7 @@ mod iter_tests {
     use super::*;
 
     #[test]
-    fn can_do_breadth_first_traversal() {
+    fn can_do_breadth_first_search() {
         let mut g = HashGraph::with_vertices(['a', 'b', 'c', 'd', 'e', 'f']).unwrap();
         g.create_edge('a', 'b', 2.0).unwrap();
         g.create_edge('a', 'c', 3.0).unwrap();
@@ -327,7 +373,10 @@ mod iter_tests {
         // 'f' can't be reached
 
         let mut visit_order = HashMap::<char, usize>::new();
-        for (i, (vertex, _edge)) in g.broad_iter('a').enumerate() {
+        for (i, (vertex, edge)) in g.breadth_first_iter('a').enumerate() {
+            if let Some(edge) = edge {
+                assert_eq!(&vertex, edge.target());
+            }
             visit_order.insert(vertex, i);
         }
 
@@ -336,5 +385,35 @@ mod iter_tests {
         assert!(visit_order[&'c'] < visit_order[&'d']);
         assert!(visit_order[&'d'] < visit_order[&'e']);
         assert!(!visit_order.contains_key(&'f'));
+    }
+
+    #[test]
+    fn can_do_depth_first_search() {
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c', 'd', 'e', 'f']).unwrap();
+        g.create_edge('a', 'b', 2.0).unwrap();
+        g.create_edge('a', 'c', 3.0).unwrap();
+        g.create_edge('b', 'd', 5.0).unwrap();
+        g.create_edge('c', 'd', 1.0).unwrap();
+        g.create_edge('d', 'e', 2.0).unwrap();
+
+        g.create_edge('f', 'c', 1.0).unwrap();
+        g.create_edge('c', 'a', 5.0).unwrap();
+        // 'f' can't be reached
+
+        let mut visited = HashSet::new();
+        for (vertex, edge) in g.depth_first_iter('a') {
+            if let Some(edge) = edge {
+                assert_eq!(&vertex, edge.target());
+            }
+            visited.insert(vertex);
+            assert!(vertex != 'f', "reached isolated vertex");
+        }
+
+        for v in g.vertices() {
+            if v != &'f' {
+                // Reached everything else
+                assert!(visited.contains(v), "didn't reach node {}", v);
+            }
+        }
     }
 }
