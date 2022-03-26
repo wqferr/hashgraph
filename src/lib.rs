@@ -1,5 +1,6 @@
 use std::hash::Hash;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque, BinaryHeap, LinkedList};
+use std::ops::Add;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -15,6 +16,7 @@ pub trait Vertex: Hash + Eq + Copy {}
 impl<T: Hash + Eq + Copy> Vertex for T {}
 
 // Joins two vertices of type V, with associated edge value E
+#[derive(Debug)]
 pub struct Edge<V: Vertex, E> {
     source: V,
     target: V,
@@ -37,14 +39,14 @@ pub struct BreadthFirstIter<'a, V: Vertex, E> {
     graph: &'a HashGraph<V, E>,
     open: VecDeque<V>,
     closed: HashSet<V>,
-    parent: HashMap<V, &'a Edge<V, E>>
+    origin: HashMap<V, &'a Edge<V, E>>
 }
 
 pub struct DepthFirstIter<'a, V: Vertex, E> {
     graph: &'a HashGraph<V, E>,
     open: VecDeque<V>,
     closed: HashSet<V>,
-    parent: HashMap<V, &'a Edge<V, E>>
+    origin: HashMap<V, &'a Edge<V, E>>
 }
 
 impl<V: Vertex, E> Edge<V, E> {
@@ -156,7 +158,7 @@ impl<V: Vertex, E> HashGraph<V, E> {
             graph: self,
             closed: HashSet::new(),
             open: VecDeque::from([start]),
-            parent: HashMap::new()
+            origin: HashMap::new()
         }
     }
 
@@ -165,7 +167,7 @@ impl<V: Vertex, E> HashGraph<V, E> {
             graph: self,
             closed: HashSet::new(),
             open: VecDeque::from([start]),
-            parent: HashMap::new()
+            origin: HashMap::new()
         }
     }
 
@@ -194,12 +196,12 @@ impl<'a, V: Vertex, E> Iterator for BreadthFirstIter<'a, V, E> {
         }
         let current = self.open.pop_front().unwrap();
         self.closed.insert(current);
-        let edge_to_current = self.parent.remove(&current);
+        let edge_to_current = self.origin.remove(&current);
         for edge in self.graph.edges_from(current) {
             let next = edge.target;
             if !self.closed.contains(&next) {
                 self.open.push_back(next);
-                self.parent.insert(next, edge);
+                self.origin.insert(next, edge);
             }
         }
         Some((current, edge_to_current))
@@ -227,15 +229,96 @@ impl<'a, V: Vertex, E> Iterator for DepthFirstIter<'a, V, E> {
         }
 
         self.closed.insert(current);
-        let edge_to_current = self.parent.remove(&current);
+        let edge_to_current = self.origin.remove(&current);
         for edge in self.graph.edges_from(current) {
             let next = edge.target;
             if !self.closed.contains(&next) {
                 self.open.push_back(next);
-                self.parent.insert(next, edge);
+                self.origin.insert(next, edge);
             }
         }
         Some((current, edge_to_current))
+    }
+}
+
+pub trait Cost: Sized + Add<Output=Self> + Ord + Clone + Default {}
+impl<T: Sized + Add<Output=Self> + Ord + Clone + Default> Cost for T {}
+
+#[derive(Eq, Debug)]
+struct PrioritizedVertex<V: Vertex, C: Cost>(V, C);
+
+impl<V: Vertex, C: Cost> PartialEq for PrioritizedVertex<V, C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.1 == other.1
+    }
+}
+
+impl<V: Vertex, C: Cost> PartialOrd for PrioritizedVertex<V, C> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<V: Vertex, C: Cost> Ord for PrioritizedVertex<V, C> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.1.cmp(&other.1) {
+            // Invert order for max-heap usage
+            std::cmp::Ordering::Less => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => std::cmp::Ordering::Equal,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Less,
+        }
+    }
+}
+
+impl<V: Vertex, E: Cost> HashGraph<V, E> {
+    // This *will* repeatedly clone edge costs
+    pub fn min_cost_path(&self, start: V, end: V) -> Option<(E, Vec<&Edge<V, E>>)> {
+        let mut origin = HashMap::new();
+        let mut discovered_cost = HashMap::new();
+        let mut open = BinaryHeap::<PrioritizedVertex<V, E>>::new();
+        let mut closed = HashSet::new();
+
+        open.push(PrioritizedVertex(start, E::default()));
+
+        while let Some(PrioritizedVertex(current, current_cost)) = open.pop() {
+            closed.insert(current);
+            if current == end {
+                break;
+            }
+
+            for edge in self.edges_from(current) {
+                let neighbor = edge.target();
+                if closed.contains(neighbor) {
+                    continue;
+                }
+
+                let new_total_cost = current_cost.clone() + edge.value().to_owned();
+                if let Some(prev_total_cost) = discovered_cost.get(neighbor) {
+                    if &new_total_cost < prev_total_cost {
+                        open.push(PrioritizedVertex(neighbor.to_owned(), new_total_cost.to_owned()));
+                        discovered_cost.insert(neighbor.to_owned(), new_total_cost);
+                        origin.insert(neighbor.to_owned(), edge);
+                    }
+                } else {
+                    open.push(PrioritizedVertex(neighbor.to_owned(), new_total_cost.to_owned()));
+                    discovered_cost.insert(neighbor.to_owned(), new_total_cost);
+                    origin.insert(neighbor.to_owned(), edge);
+                }
+            }
+        }
+
+        if let Some(cost) = discovered_cost.get(&end) {
+            let mut path = LinkedList::new();
+            let mut current = *origin.get(&end).unwrap();
+            while current.source() != &start {
+                path.push_front(current);
+                current = origin.get(current.source()).unwrap();
+            }
+            path.push_front(current);
+            Some((cost.to_owned(), path.into_iter().collect()))
+        } else {
+            None
+        }
     }
 }
 
@@ -415,5 +498,51 @@ mod iter_tests {
                 assert!(visited.contains(v), "didn't reach node {}", v);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod pathfinding_tests {
+    use super::*;
+
+    #[test]
+    fn test_dijkstra() {
+        // Image from https://www.chegg.com/homework-help/questions-and-answers/8-4-14-10-2-figure-2-directed-graph-computing-shortest-path-3-dijkstra-s-algorithm-computi-q25960616
+        let mut g = HashGraph::with_vertices(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']).unwrap();
+        g.create_edge('a', 'b', 4).unwrap();
+
+        g.create_edge('b', 'c', 11).unwrap();
+        g.create_edge('b', 'd', 9).unwrap();
+
+        g.create_edge('c', 'a', 8).unwrap();
+
+        g.create_edge('d', 'c', 7).unwrap();
+        g.create_edge('d', 'e', 2).unwrap();
+        g.create_edge('d', 'f', 6).unwrap();
+
+        g.create_edge('e', 'b', 8).unwrap();
+        g.create_edge('e', 'g', 7).unwrap();
+        g.create_edge('e', 'h', 4).unwrap();
+
+        g.create_edge('f', 'c', 1).unwrap();
+        g.create_edge('f', 'e', 5).unwrap();
+
+        g.create_edge('g', 'h', 14).unwrap();
+        g.create_edge('g', 'i', 9).unwrap();
+
+        g.create_edge('h', 'f', 2).unwrap();
+        g.create_edge('h', 'i', 10).unwrap();
+
+        let result = g.min_cost_path('b', 'i');
+        assert!(result.is_some());
+        let (cost, path) = result.unwrap();
+        assert_eq!(25, cost);
+        assert_eq!(&'b', path[0].source());
+        assert_eq!(
+            vec!['d', 'e', 'h', 'i'],
+            path.iter()
+                .map(|e| e.target().to_owned())
+                .collect::<Vec<_>>()
+        );
     }
 }
